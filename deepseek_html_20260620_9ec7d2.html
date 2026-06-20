@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>3D ВЫЖИВАНИЕ</title>
+    <style>
+        * { margin: 0; padding: 0; }
+        body { overflow: hidden; background: #0a0a12; touch-action: none; }
+        canvas { display: block; }
+        #ui {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            color: rgba(255,255,255,0.6);
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 14px;
+            pointer-events: none;
+            line-height: 1.6;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+        }
+        #ui span { color: #f7d44a; font-weight: bold; }
+        #info {
+            position: fixed;
+            bottom: 20px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            color: rgba(255,255,255,0.08);
+            font-size: 11px;
+            letter-spacing: 2px;
+            pointer-events: none;
+            font-family: 'Segoe UI', sans-serif;
+        }
+        #gameOver {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            font-family: 'Segoe UI', sans-serif;
+            color: #fff;
+            backdrop-filter: blur(4px);
+        }
+        #gameOver h1 { font-size: 48px; margin-bottom: 10px; }
+        #gameOver p { font-size: 18px; opacity: 0.6; margin-bottom: 20px; }
+        #gameOver button {
+            padding: 12px 40px;
+            border: none;
+            border-radius: 40px;
+            font-size: 18px;
+            font-weight: bold;
+            background: #44dd88;
+            color: #0a0a12;
+            cursor: pointer;
+            transition: transform 0.1s;
+        }
+        #gameOver button:active { transform: scale(0.95); }
+        #restartBtn {
+            position: fixed;
+            bottom: 80px;
+            right: 20px;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 40px;
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.3);
+            font-size: 12px;
+            cursor: pointer;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.02);
+            font-family: 'Segoe UI', sans-serif;
+            display: none;
+        }
+        #restartBtn:active { background: rgba(255,255,255,0.1); }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        🧟 <span id="killCount">0</span><br />
+        ⏱️ <span id="timeCount">0</span> сек
+    </div>
+
+    <div id="gameOver">
+        <h1>💀</h1>
+        <p>ВЫ УМЕРЛИ</p>
+        <button id="restartBtnOver">ЗАНОВО</button>
+    </div>
+
+    <div id="info">3D ВЫЖИВАНИЕ • WASD / Джойстик</div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.126.0/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        // ================================================================
+        //  3D ВЫЖИВАНИЕ — полная игра
+        // ================================================================
+
+        import * as THREE from 'three';
+
+        // ----- ИГРОВЫЕ ПЕРЕМЕННЫЕ -----
+        let kills = 0;
+        let time = 0;
+        let gameActive = true;
+        let frame = 0;
+        let enemies = [];
+        let bullets = [];
+        let enemySpawnTimer = 0;
+        const ENEMY_SPAWN_DELAY = 30;
+        let playerSpeed = 0.12;
+
+        // ----- DOM -----
+        const killDisplay = document.getElementById('killCount');
+        const timeDisplay = document.getElementById('timeCount');
+        const gameOverDiv = document.getElementById('gameOver');
+        const restartBtn = document.getElementById('restartBtnOver');
+        const restartBtnSmall = document.getElementById('restartBtn');
+
+        // ----- СЦЕНА -----
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0a12);
+        scene.fog = new THREE.Fog(0x0a0a12, 15, 30);
+
+        // ----- КАМЕРА (вид сверху-сбоку) -----
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 50);
+        camera.position.set(0, 12, 12);
+        camera.lookAt(0, 0, 0);
+
+        // ----- РЕНДЕРЕР -----
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.2;
+        document.body.appendChild(renderer.domElement);
+
+        // ----- СВЕТ -----
+        const ambient = new THREE.AmbientLight(0x222244, 0.5);
+        scene.add(ambient);
+
+        const dirLight = new THREE.DirectionalLight(0xffeedd, 1.2);
+        dirLight.position.set(10, 20, 8);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 1024;
+        dirLight.shadow.mapSize.height = 1024;
+        dirLight.shadow.camera.near = 0.5;
+        dirLight.shadow.camera.far = 30;
+        dirLight.shadow.camera.left = -15;
+        dirLight.shadow.camera.right = 15;
+        dirLight.shadow.camera.top = 15;
+        dirLight.shadow.camera.bottom = -15;
+        scene.add(dirLight);
+
+        const fillLight = new THREE.DirectionalLight(0x4488ff, 0.2);
+        fillLight.position.set(-5, 3, -5);
+        scene.add(fillLight);
+
+        // ----- ПОЛ (сетка) -----
+        const gridHelper = new THREE.GridHelper(20, 20, 0x444466, 0x222244);
+        gridHelper.position.y = -0.5;
+        scene.add(gridHelper);
+
+        // Прозрачная подложка
+        const planeGeo = new THREE.PlaneGeometry(20, 20);
+        const planeMat = new THREE.MeshStandardMaterial({
+            color: 0x0a0a18,
+            transparent: true,
+            opacity: 0.3,
+            roughness: 0.9,
+            metalness: 0.0,
+            side: THREE.DoubleSide
+        });
+        const plane = new THREE.Mesh(planeGeo, planeMat);
+        plane.rotation.x = -Math.PI / 2;
+        plane.position.y = -0.45;
+        plane.receiveShadow = true;
+        scene.add(plane);
+
+        // ----- ИГРОК (стильный куб с глазами) -----
+        const playerGroup = new THREE.Group();
+
+        const bodyGeo = new THREE.BoxGeometry(0.9, 0.9, 0.9);
+        const bodyMat = new THREE.MeshStandardMaterial({
+            color: 0x44dd88,
+            roughness: 0.2,
+            metalness: 0.1,
+            emissive: new THREE.Color(0x224422),
+            emissiveIntensity: 0.05
+        });
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.castShadow = true;
+        body.receiveShadow = true;
+        body.position.y = 0.45;
+        playerGroup.add(body);
+
+        // Глаза
+        const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: new THREE.Color(0x88ddff),
+            emissiveIntensity: 0.2 });
+        const eyeGeo = new THREE.SphereGeometry(0.12, 8, 8);
+        const eye1 = new THREE.Mesh(eyeGeo, eyeMat);
+        eye1.position.set(-0.2, 0.6, 0.45);
+        playerGroup.add(eye1);
+        const eye2 = new THREE.Mesh(eyeGeo, eyeMat);
+        eye2.position.set(0.2, 0.6, 0.45);
+        playerGroup.add(eye2);
+
+        // Зрачки
+        const pupilMat = new THREE.MeshStandardMaterial({ color: 0x0a0a12 });
+        const pupilGeo = new THREE.SphereGeometry(0.05, 6, 6);
+        const p1 = new THREE.Mesh(pupilGeo, pupilMat);
+        p1.position.set(-0.2, 0.58, 0.52);
+        playerGroup.add(p1);
+        const p2 = new THREE.Mesh(pupilGeo, pupilMat);
+        p2.position.set(0.2, 0.58, 0.52);
+        playerGroup.add(p2);
+
+        playerGroup.position.set(0, 0, 0);
+        scene.add(playerGroup);
+
+        // Аура (кольцо вокруг игрока)
+        const ringGeo = new THREE.TorusGeometry(0.8, 0.03, 8, 30);
+        const ringMat = new THREE.MeshStandardMaterial({
+            color: 0x44dd88,
+            transparent: true,
+            opacity: 0.15,
+            side: THREE.DoubleSide,
+            emissive: new THREE.Color(0x44dd88),
+            emissiveIntensity: 0.1
+        });
+        const auraRing = new THREE.Mesh(ringGeo, ringMat);
+        auraRing.rotation.x = Math.PI / 2;
+        auraRing.position.y = 0.2;
+        scene.add(auraRing);
+
+        // ----- УПРАВЛЕНИЕ (клавиши + сенсор) -----
+        const keys = { w: false, a: false, s: false, d: false };
+        document.addEventListener('keydown', (e) => {
+            const k = e.key.toLowerCase();
+            if (k === 'w' || k === 'a' || k === 's' || k === 'd') keys[k] = true;
+            if (e.key === 'r' || e.key === 'R') restartGame();
+        });
+        document.addEventListener('keyup', (e) => {
+            const k = e.key.toLowerCase();
+            if (k === 'w' || k === 'a' || k === 's' || k === 'd') keys[k] = false;
+        });
+
+        // Джойстик (виртуальный — просто касание экрана)
+        let touchX = null,
+            touchY = null;
+        const canvasEl = renderer.domElement;
+        canvasEl.addEventListener('touchstart', (e) => {
+            const t = e.touches[0];
+            touchX = t.clientX;
+            touchY = t.clientY;
+        }, { passive: true });
+        canvasEl.addEventListener('touchmove', (e) => {
+            const t = e.touches[0];
+            touchX = t.clientX;
+            touchY = t.clientY;
+        }, { passive: true });
+        canvasEl.addEventListener('touchend', () => { touchX = null;
+            touchY = null; }, { passive: true });
+
+        // ----- ВРАГИ -----
+        function spawnEnemy() {
+            const angle = Math.random() * Math.PI * 2;
+            const radius = 8 + Math.random() * 4;
+            const x = Math.cos(angle) * radius;
+            const z = Math.sin(angle) * radius;
+
+            const geo = new THREE.SphereGeometry(0.4 + Math.random() * 0.2, 12, 12);
+            const mat = new THREE.MeshStandardMaterial({
+                color: 0xff4455,
+                roughness: 0.4,
+                metalness: 0.1,
+                emissive: new THREE.Color(0x882222),
+                emissiveIntensity: 0.2
+            });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            mesh.position.set(x, 0.4, z);
+            scene.add(mesh);
+
+            enemies.push({
+                mesh: mesh,
+                x: x,
+                z: z,
+                hp: 1,
+                speed: 0.02 + Math.random() * 0.02
+            });
+        }
+
+        // ----- СТРЕЛЬБА -----
+        function shootAt(target) {
+            if (!gameActive) return;
+            const dir = new THREE.Vector3(target.x - playerGroup.position.x, 0, target.z - playerGroup.position.z);
+            if (dir.length() < 0.5) return;
+            dir.normalize();
+
+            const bulletGeo = new THREE.SphereGeometry(0.08, 6, 6);
+            const bulletMat = new THREE.MeshStandardMaterial({
+                color: 0xffdd77,
+                emissive: new THREE.Color(0xffaa44),
+                emissiveIntensity: 0.5
+            });
+            const bullet = new THREE.Mesh(bulletGeo, bulletMat);
+            bullet.position.copy(playerGroup.position);
+            bullet.position.y = 0.4;
+            scene.add(bullet);
+
+            bullets.push({
+                mesh: bullet,
+                vx: dir.x * 0.3,
+                vz: dir.z * 0.3,
+                life: 60
+            });
+        }
+
+        // ----- ОБНОВЛЕНИЕ -----
+        function update() {
+            if (!gameActive) return;
+
+            frame++;
+            if (frame % 60 === 0) { time++;
+                timeDisplay.textContent = time; }
+
+            // Движение игрока
+            let dx = 0,
+                dz = 0;
+            if (keys.w) dz -= 1;
+            if (keys.s) dz += 1;
+            if (keys.a) dx -= 1;
+            if (keys.d) dx += 1;
+
+            // Сенсор
+            if (touchX !== null && touchY !== null) {
+                const cx = window.innerWidth / 2;
+                const cy = window.innerHeight / 2;
+                const tdx = (touchX - cx) / cx;
+                const tdy = (touchY - cy) / cy;
+                const len = Math.sqrt(tdx * tdx + tdy * tdy);
+                if (len > 0.2) {
+                    dx = tdx / Math.max(len, 0.5);
+                    dz = tdy / Math.max(len, 0.5);
+                }
+            }
+
+            const len2 = Math.sqrt(dx * dx + dz * dz);
+            if (len2 > 0.1) {
+                dx = dx / len2 * playerSpeed;
+                dz = dz / len2 * playerSpeed;
+                // Поворот игрока в сторону движения
+                const angle = Math.atan2(dx, dz);
+                playerGroup.rotation.y = angle;
+            }
+
+            const newX = playerGroup.position.x + dx;
+            const newZ = playerGroup.position.z + dz;
+            const limit = 8.5;
+            playerGroup.position.x = Math.max(-limit, Math.min(limit, newX));
+            playerGroup.position.z = Math.max(-limit, Math.min(limit, newZ));
+
+            // Аура дышит
+            auraRing.scale.setScalar(1 + Math.sin(frame * 0.05) * 0.05);
+
+            // Появление врагов
+            enemySpawnTimer++;
+            if (enemySpawnTimer >= ENEMY_SPAWN_DELAY && enemies.length < 20) {
+                enemySpawnTimer = 0;
+                spawnEnemy();
+            }
+
+            // Движение врагов к игроку
+            for (const e of enemies) {
+                const dx2 = playerGroup.position.x - e.x;
+                const dz2 = playerGroup.position.z - e.z;
+                const dist = Math.sqrt(dx2 * dx2 + dz2 * dz2);
+                if (dist > 0.3) {
+                    e.x += (dx2 / dist) * e.speed;
+                    e.z += (dz2 / dist) * e.speed;
+                }
+                e.mesh.position.set(e.x, 0.4, e.z);
+
+                // Враг смотрит на игрока
+                e.mesh.lookAt(playerGroup.position.x, 0.4, playerGroup.position.z);
+
+                // Столкновение с игроком
+                if (dist < 0.8) {
+                    gameActive = false;
+                    gameOverDiv.style.display = 'flex';
+                    return;
+                }
+            }
+
+            // Автострельба по ближайшему врагу
+            if (frame % 6 === 0) {
+                let nearest = null;
+                let nearDist = Infinity;
+                for (const e of enemies) {
+                    const dx2 = e.x - playerGroup.position.x;
+                    const dz2 = e.z - playerGroup.position.z;
+                    const d = Math.sqrt(dx2 * dx2 + dz2 * dz2);
+                    if (d < nearDist && d < 8) {
+                        nearDist = d;
+                        nearest = e;
+                    }
+                }
+                if (nearest) {
+                    shootAt(nearest);
+                }
+            }
+
+            // Обновление пуль
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const b = bullets[i];
+                b.x += b.vx;
+                b.z += b.vz;
+                b.life--;
+                b.mesh.position.set(b.x, 0.4, b.z);
+                if (b.life <= 0 || Math.abs(b.x) > 12 || Math.abs(b.z) > 12) {
+                    scene.remove(b.mesh);
+                    bullets.splice(i, 1);
+                    continue;
+                }
+                // Попадание в врага
+                let hit = false;
+                for (let j = enemies.length - 1; j >= 0; j--) {
+                    const e = enemies[j];
+                    const dx2 = b.x - e.x;
+                    const dz2 = b.z - e.z;
+                    if (Math.sqrt(dx2 * dx2 + dz2 * dz2) < 0.6) {
+                        scene.remove(e.mesh);
+                        enemies.splice(j, 1);
+                        kills++;
+                        killDisplay.textContent = kills;
+                        hit = true;
+                        break;
+                    }
+                }
+                if (hit) {
+                    scene.remove(b.mesh);
+                    bullets.splice(i, 1);
+                }
+            }
+
+            // Обновление камеры (следит за игроком)
+            const camTarget = new THREE.Vector3(playerGroup.position.x, 12, playerGroup.position.z + 12);
+            camera.position.lerp(camTarget, 0.05);
+            camera.lookAt(playerGroup.position.x, 0, playerGroup.position.z);
+        }
+
+        // ----- ПЕРЕЗАПУСК -----
+        function restartGame() {
+            // Удаляем всех врагов
+            for (const e of enemies) {
+                scene.remove(e.mesh);
+            }
+            enemies = [];
+            // Удаляем все пули
+            for (const b of bullets) {
+                scene.remove(b.mesh);
+            }
+            bullets = [];
+            kills = 0;
+            time = 0;
+            gameActive = true;
+            frame = 0;
+            enemySpawnTimer = 0;
+            playerGroup.position.set(0, 0, 0);
+            killDisplay.textContent = '0';
+            timeDisplay.textContent = '0';
+            gameOverDiv.style.display = 'none';
+        }
+
+        restartBtn.addEventListener('click', restartGame);
+        restartBtnSmall.addEventListener('click', restartGame);
+        window.restartGame = restartGame;
+
+        // ----- ЦИКЛ АНИМАЦИИ -----
+        function animate() {
+            requestAnimationFrame(animate);
+            update();
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        // ----- АДАПТАЦИЯ -----
+        window.addEventListener('resize', () => {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+            renderer.setSize(w, h);
+        });
+
+        // Первые враги
+        for (let i = 0; i < 6; i++) spawnEnemy();
+
+        console.log('🔥 3D ВЫЖИВАНИЕ запущена!');
+    </script>
+</body>
+</html>
